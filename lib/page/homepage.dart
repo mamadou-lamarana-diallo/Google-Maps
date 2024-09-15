@@ -20,18 +20,12 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
-  final Completer<GoogleMapController> _controller =
-      Completer<GoogleMapController>();
+  final Completer<GoogleMapController> _controller = Completer<GoogleMapController>();
   String _darkMapStyle = "";
   StreamSubscription<Position>? _positionStream;
-  final CameraPosition _cameraPos = const CameraPosition(
-    target: LatLng(48.14918762944394, 11.580469375826612),
-    zoom: 16,
-  );
+  CameraPosition? _cameraPos;
   List<Marker> markerList = [];
-  final Marker _destinationMarker = const Marker(
-      markerId: MarkerId("destination"),
-      position: LatLng(48.1510805637, 11.5789536609));
+  Marker? _destinationMarker;
   Position? _currentPosition;
   List<Polyline> myRouteList = [];
   MapsRoutes route = MapsRoutes();
@@ -40,16 +34,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void initState() {
+    super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      markerList.add(_destinationMarker);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _currentPosition = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      setState(() {
+        _cameraPos = CameraPosition(
+          target: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+          zoom: 16,
+        );
+      });
       setCustomIconForUserLocation();
       _loadMapStyles().then((_) {
         if (mounted) setState(() {});
       });
       checkPermissionAndListenLocation();
     });
-    super.initState();
   }
 
   @override
@@ -80,23 +80,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             style: TextStyle(color: Colors.grey[300])),
       ),
       body: !PermissionProvider.isServiceOn ||
-              PermissionProvider.locationPermission !=
-                  PermissionStatus.granted ||
-              _darkMapStyle.isEmpty
+          PermissionProvider.locationPermission != PermissionStatus.granted ||
+          _darkMapStyle.isEmpty
           ? Container(
-              color: Colors.grey[700],
-              child: const Center(child: CircularProgressIndicator()))
+          color: Colors.grey[700],
+          child: const Center(child: CircularProgressIndicator()))
           : GoogleMap(
-              style: _darkMapStyle,
-              polylines: Set<Polyline>.from(myRouteList),
-              initialCameraPosition: _cameraPos,
-              markers: Set<Marker>.from(markerList),
-              onMapCreated: (GoogleMapController controller) {
-                if (!_controller.isCompleted) {
-                  _controller.complete(controller);
-                }
-              },
-            ),
+        mapType: MapType.normal,
+        myLocationEnabled: true,
+        polylines: Set<Polyline>.from(myRouteList),
+        initialCameraPosition: _cameraPos ?? const CameraPosition(
+            target: LatLng(48.14918762944394, 11.580469375826612), zoom: 16),
+        markers: Set<Marker>.from(markerList),
+        onMapCreated: (GoogleMapController controller) {
+          if (!_controller.isCompleted) {
+            _controller.complete(controller);
+          }
+        },
+        onTap: (LatLng position) {
+          setNewDestination(position);
+        },
+      ),
     );
   }
 
@@ -122,12 +126,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       myLatLngList.add(mtk.LatLng(data.latitude, data.longitude));
     }
     mtk.LatLng myPosition =
-        mtk.LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
+    mtk.LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
     // we check if our location is on route or not
     int x = mtk.PolygonUtil.locationIndexOnPath(myPosition, myLatLngList, true,
         tolerance: 12);
-    /* x: -1 if point does not lie on or near the polyline. 0 if point is between
-            poly[0] and poly[1] (inclusive), 1 if between poly[1] and poly[2]... */
     if (x == -1) {
       getNewRouteFromAPI();
     } else {
@@ -141,17 +143,30 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   void getNewRouteFromAPI() async {
+    if (_currentPosition == null || _destinationMarker == null) return;
+
     if (route.routes.isNotEmpty) route.routes.clear();
     if (myRouteList.isNotEmpty) myRouteList.clear();
     log("GETTING NEW ROUTE !!");
     await route.drawRoute([
       LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-      LatLng(_destinationMarker.position.latitude,
-          _destinationMarker.position.longitude)
+      LatLng(_destinationMarker!.position.latitude,
+          _destinationMarker!.position.longitude)
     ], 'route', const Color.fromARGB(255, 33, 155, 255), Constants.googleApiKey,
         travelMode: TravelModes.driving);
     myRouteList.add(route.routes.first);
     if (mounted) setState(() {});
+  }
+
+  void setNewDestination(LatLng position) {
+    setState(() {
+      _destinationMarker = Marker(
+        markerId: MarkerId("destination"),
+        position: position,
+      );
+      markerList.add(_destinationMarker!);
+    });
+    getNewRouteFromAPI();
   }
 
   @override
@@ -185,7 +200,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   void startListeningLocation() {
     _positionStream = Geolocator.getPositionStream(
-            locationSettings: const LocationSettings(accuracy: LocationAccuracy.high))
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high))
         .listen((Position? position) {
       if (position != null) {
         log('${position.latitude.toString()}, ${position.longitude.toString()}');
@@ -202,8 +217,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     markerList.removeWhere((e) => e.markerId == const MarkerId("myLocation"));
     myLocationMarker = Marker(
         markerId: const MarkerId("myLocation"),
-        position:
-            LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+        position: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
         icon: markerIcon,
         rotation: _currentPosition!.heading);
     if (markerIcon != BitmapDescriptor.defaultMarker) {
